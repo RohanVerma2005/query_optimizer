@@ -18,13 +18,13 @@ from rewriter.rewrite_engine import QueryRewriteEngine
 
 st.set_page_config(page_title="Query Performance Analyzer", page_icon="⚡", layout="wide")
 
-st.title("⚡ Query Performance Analyzer & Optimizer")
+st.title("Query Performance Analyzer & Optimizer")
 st.markdown("Continuous SQL Telemetry, Automated Diagnostics & Index Recommendations")
 
 # Sidebar
 st.sidebar.header("Controls & Settings")
 poll_rate = st.sidebar.slider("Auto-Refresh Rate (seconds)", 5, 60, 15)
-if st.sidebar.button("🔄 Refresh Telemetry"):
+if st.sidebar.button("Refresh Telemetry"):
     st.rerun()
 
 # --- Section 1: KPI Metrics ---
@@ -53,14 +53,12 @@ col4.metric("Active Regressions", len(regressions), delta=f"{len(regressions)} S
 
 st.divider()
 
-# --- Section 2: Active Regressions Alert Banner ---
 if regressions:
-    st.error("⚠️ Active Query Latency Regressions Detected!")
+    st.error("Active Query Latency Regressions Detected!")
     reg_df = pd.DataFrame([r.__dict__ for r in regressions])
     st.dataframe(reg_df[['status', 'query_preview', 'baseline_avg_ms', 'recent_avg_ms', 'percentage_change']], use_container_width=True)
 
-# --- Section 3: Latency Over Time (Timeline Chart) ---
-st.subheader("📈 Query Latency Over Time (Per Snapshot)")
+st.subheader("Query Latency Over Time (Per Snapshot)")
 conn = get_connection(include_db=False)
 try:
     timeline_query = """
@@ -90,8 +88,7 @@ try:
 finally:
     conn.close()
 
-# --- Section 4: Top Offenders & Inefficiency Leaderboard ---
-tab1, tab2, tab3 = st.tabs(["🔥 Top Resource Hogs", "🔍 Index Recommendations", "✍️ Rewrite Suggestions"])
+tab1, tab2, tab3 = st.tabs(["Top Resource Hogs", "🔍 Index Recommendations", "✍️ Rewrite Suggestions"])
 
 with tab1:
     offenders = get_top_offenders(limit=10, sort_by="total_time")
@@ -114,7 +111,7 @@ with tab2:
             v_res = validator.validate_recommendation(d['digest_text'], rec)
             if v_res and v_res.is_beneficial:
                 has_index = True
-                with st.expander(f"📌 {rec.table_name.upper()} — Suggestion (+{v_res.cost_reduction_pct}% cost reduction)"):
+                with st.expander(f"{rec.table_name.upper()} — Suggestion (+{v_res.cost_reduction_pct}% cost reduction)"):
                     st.write(f"**Target Columns:** `{', '.join(rec.columns)}`")
                     st.write(f"**Reason:** {rec.reason}")
                     st.code(rec.create_statement, language="sql")
