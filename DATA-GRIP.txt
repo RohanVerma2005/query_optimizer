@@ -1,0 +1,180 @@
+DROP DATABASE IF EXISTS qpa_workload;
+CREATE DATABASE qpa_workload;
+USE qpa_workload;
+
+-- 1. Customers
+CREATE TABLE customers (
+                           id INT AUTO_INCREMENT PRIMARY KEY,
+                           full_name VARCHAR(100) NOT NULL,
+                           email VARCHAR(150) NOT NULL,
+                           phone VARCHAR(50),
+                           country VARCHAR(50),
+                           created_at DATETIME NOT NULL
+    -- Intentionally NO index on email, country, or created_at
+);
+
+-- 2. Categories
+CREATE TABLE categories (
+                            id INT AUTO_INCREMENT PRIMARY KEY,
+                            name VARCHAR(100) NOT NULL,
+                            description VARCHAR(255)
+);
+
+-- 3. Products
+CREATE TABLE products (
+                          id INT AUTO_INCREMENT PRIMARY KEY,
+                          category_id INT NOT NULL,
+                          title VARCHAR(150) NOT NULL,
+                          sku VARCHAR(50) NOT NULL,
+                          price DECIMAL(10, 2) NOT NULL,
+                          stock INT NOT NULL,
+                          description TEXT,
+                          created_at DATETIME NOT NULL
+    -- Intentionally NO foreign key index on category_id or title
+);
+
+-- 4. Orders
+CREATE TABLE orders (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        customer_id INT NOT NULL,
+                        order_status VARCHAR(50) NOT NULL, -- PENDING, COMPLETED, CANCELLED, REFUNDED
+                        total_amount DECIMAL(10, 2) NOT NULL,
+                        shipping_address VARCHAR(255),
+                        created_at DATETIME NOT NULL
+    -- Intentionally NO index on customer_id, order_status, or created_at
+);
+
+-- 5. Order Items
+CREATE TABLE order_items (
+                             id INT AUTO_INCREMENT PRIMARY KEY,
+                             order_id INT NOT NULL,
+                             product_id INT NOT NULL,
+                             quantity INT NOT NULL,
+                             unit_price DECIMAL(10, 2) NOT NULL
+    -- Intentionally NO index on order_id or product_id
+);
+
+-- 6. Product Reviews
+CREATE TABLE reviews (
+                         id INT AUTO_INCREMENT PRIMARY KEY,
+                         product_id INT NOT NULL,
+                         customer_id INT NOT NULL,
+                         rating TINYINT NOT NULL,
+                         review_text TEXT,
+                         created_at DATETIME NOT NULL
+    -- Intentionally NO index on product_id or rating
+);
+
+
+USE qpa_workload;
+
+ALTER TABLE customers
+    MODIFY COLUMN country VARCHAR(150) NOT NULL,
+    MODIFY COLUMN phone VARCHAR(100);
+
+
+
+SELECT
+    SCHEMA_NAME,
+    DIGEST_TEXT,
+    COUNT_STAR AS exec_count,
+    ROUND(AVG_TIMER_WAIT / 1000000000, 2) AS avg_latency_ms,
+    ROUND(SUM_TIMER_WAIT / 1000000000, 2) AS total_latency_ms,
+    ROUND(SUM_ROWS_EXAMINED / COUNT_STAR, 0) AS avg_rows_scanned,
+    ROUND(SUM_ROWS_SENT / COUNT_STAR, 0) AS avg_rows_sent
+FROM performance_schema.events_statements_summary_by_digest
+WHERE SCHEMA_NAME = 'qpa_workload'
+ORDER BY SUM_TIMER_WAIT DESC
+LIMIT 10;
+
+
+
+CREATE DATABASE IF NOT EXISTS qpa_metrics;
+USE qpa_metrics;
+
+-- 1. Query Catalog: Stores unique normalized query fingerprints
+CREATE TABLE IF NOT EXISTS query_catalog (
+                                             digest_hash VARCHAR(64) PRIMARY KEY,
+                                             schema_name VARCHAR(64) NOT NULL,
+                                             digest_text TEXT NOT NULL,
+                                             first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                             last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- 2. Snapshots Header: Keeps track of each polling run timestamp
+CREATE TABLE IF NOT EXISTS metric_snapshots (
+                                                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                                                captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                server_uptime_sec BIGINT NOT NULL
+);
+
+-- 3. Query Delta Metrics: Stores per-interval delta stats for each query
+CREATE TABLE IF NOT EXISTS query_interval_stats (
+                                                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                                                    snapshot_id BIGINT NOT NULL,
+                                                    digest_hash VARCHAR(64) NOT NULL,
+                                                    interval_seconds INT NOT NULL,
+                                                    delta_exec_count BIGINT NOT NULL,
+                                                    delta_total_ms DOUBLE NOT NULL,
+                                                    avg_latency_ms DOUBLE NOT NULL,
+                                                    delta_rows_examined BIGINT NOT NULL,
+                                                    delta_rows_sent BIGINT NOT NULL,
+                                                    examined_to_sent_ratio DOUBLE NOT NULL,
+                                                    FOREIGN KEY (snapshot_id) REFERENCES metric_snapshots(id) ON DELETE CASCADE,
+                                                    FOREIGN KEY (digest_hash) REFERENCES query_catalog(digest_hash) ON DELETE CASCADE,
+                                                    INDEX idx_digest_snapshot (digest_hash, snapshot_id)
+);
+
+
+SELECT
+    s.id AS snapshot_id,
+    s.captured_at,
+    SUBSTRING(c.digest_text, 1, 60) AS query_preview,
+    i.delta_exec_count,
+    i.avg_latency_ms,
+    i.delta_rows_examined,
+    i.examined_to_sent_ratio
+FROM qpa_metrics.query_interval_stats i
+         JOIN qpa_metrics.query_catalog c ON i.digest_hash = c.digest_hash
+         JOIN qpa_metrics.metric_snapshots s ON i.snapshot_id = s.id
+ORDER BY s.id DESC, i.avg_latency_ms DESC
+LIMIT 15;
+
+
+USE qpa_metrics;
+
+CREATE TABLE IF NOT EXISTS applied_optimizations (
+                                                     id INT AUTO_INCREMENT PRIMARY KEY,
+                                                     digest_hash VARCHAR(64) NOT NULL,
+                                                     optimization_type VARCHAR(50) NOT NULL, -- INDEX, REWRITE
+                                                     details TEXT NOT NULL,
+                                                     applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                     before_avg_latency_ms DOUBLE NOT NULL,
+                                                     before_avg_rows_scanned DOUBLE NOT NULL,
+                                                     after_avg_latency_ms DOUBLE NULL,
+                                                     after_avg_rows_scanned DOUBLE NULL,
+                                                     improvement_pct DOUBLE NULL,
+                                                     FOREIGN KEY (digest_hash) REFERENCES query_catalog(digest_hash) ON DELETE CASCADE
+);
+
+
+-- 1. Create or update the dedicated collector user
+CREATE USER IF NOT EXISTS 'qpa_collector'@'localhost' IDENTIFIED BY 'collector_secure_pass';
+
+-- 2. Telemetry grants (performance_schema & sys)
+GRANT SELECT ON performance_schema.* TO 'qpa_collector'@'localhost';
+GRANT SELECT ON sys.* TO 'qpa_collector'@'localhost';
+
+-- 3. Read access to workload database (for running EXPLAIN)
+GRANT SELECT ON qpa_workload.* TO 'qpa_collector'@'localhost';
+
+-- 4. Full access to metrics database (for saving intervals and history)
+GRANT ALL PRIVILEGES ON qpa_metrics.* TO 'qpa_collector'@'localhost';
+
+FLUSH PRIVILEGES;
+
+-- Test query simulating the collector:
+SELECT TABLE_SCHEMA, TABLE_NAME, INDEX_NAME
+FROM information_schema.STATISTICS
+WHERE TABLE_SCHEMA = 'qpa_workload'
+LIMIT 5;
