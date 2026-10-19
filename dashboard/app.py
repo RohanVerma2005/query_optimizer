@@ -16,7 +16,7 @@ from optimizer.index_advisor import IndexAdvisor
 from optimizer.index_validator import IndexValidator
 from rewriter.rewrite_engine import QueryRewriteEngine
 
-st.set_page_config(page_title="Query Performance Analyzer", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Query Performance Analyzer", page_icon="", layout="wide")
 
 st.title("Query Performance Analyzer & Optimizer")
 st.markdown("Continuous SQL Telemetry, Automated Diagnostics & Index Recommendations")
@@ -88,7 +88,7 @@ try:
 finally:
     conn.close()
 
-tab1, tab2, tab3 = st.tabs(["Top Resource Hogs", "🔍 Index Recommendations", "✍️ Rewrite Suggestions"])
+tab1, tab2, tab3 = st.tabs(["Top Resource Hogs", "Index Recommendations", "Rewrite Suggestions"])
 
 with tab1:
     offenders = get_top_offenders(limit=10, sort_by="total_time")
@@ -130,7 +130,7 @@ with tab3:
         suggs = engine.analyze_and_rewrite(d['digest_text'])
         for s in suggs:
             has_rewrites = True
-            with st.expander(f"🛠️ [{s.rule_id}] {s.rule_name} ({s.severity})"):
+            with st.expander(f"[{s.rule_id}] {s.rule_name} ({s.severity})"):
                 st.write(f"**Explanation:** {s.explanation}")
                 st.write(f"**Expected Benefit:** {s.expected_benefit}")
                 st.code(s.rewritten_sql, language="sql")
